@@ -63,7 +63,7 @@ jobs:
       coverage: ${{ steps.coverage.outputs.percentage }}
       badge-url: ${{ steps.badge-info.outputs.url }}
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
