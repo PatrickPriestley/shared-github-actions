@@ -1,0 +1,350 @@
+name: Generate Coverage Badge
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: 'Programming language (javascript, python, java, go, auto)'
+        required: false
+        default: 'auto'
+        type: string
+      working-directory:
+        description: 'Working directory containing coverage files'
+        required: false
+        default: '.'
+        type: string
+      coverage-file:
+        description: 'Path to coverage file (auto-detected if not specified)'
+        required: false
+        default: ''
+        type: string
+      badge-path:
+        description: 'Output path for badge file'
+        required: false
+        default: 'coverage-badge.svg'
+        type: string
+      commit-badge:
+        description: 'Commit badge to repository'
+        required: false
+        default: true
+        type: boolean
+      target-branch:
+        description: 'Branch to commit badge to'
+        required: false
+        default: 'main'
+        type: string
+      badge-label:
+        description: 'Badge label text'
+        required: false
+        default: 'coverage'
+        type: string
+      green-threshold:
+        description: 'Coverage percentage for green badge'
+        required: false
+        default: '80'
+        type: string
+      yellow-threshold:
+        description: 'Coverage percentage for yellow badge'
+        required: false
+        default: '60'
+        type: string
+    secrets:
+      GITHUB_TOKEN:
+        description: 'GitHub token for committing badge'
+        required: false
+    outputs:
+      coverage-percentage:
+        description: 'Coverage percentage found'
+        value: ${{ jobs.generate-badge.outputs.coverage }}
+      badge-url:
+        description: 'URL to the generated badge'
+        value: ${{ jobs.generate-badge.outputs.badge-url }}
+
+jobs:
+  generate-badge:
+    runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage.outputs.percentage }}
+      badge-url: ${{ steps.badge-info.outputs.url }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN || github.token }}
+
+      - name: Detect language and coverage file
+        id: detect
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          # Detect language if auto
+          if [ "${{ inputs.language }}" = "auto" ]; then
+            if [ -f "package.json" ] || [ -f "jest.config.js" ] || [ -f "coverage/lcov.info" ]; then
+              echo "detected-language=javascript" >> $GITHUB_OUTPUT
+            elif [ -f "requirements.txt" ] || [ -f "setup.py" ] || [ -f "pyproject.toml" ] || [ -f ".coverage" ] || [ -f "coverage.xml" ]; then
+              echo "detected-language=python" >> $GITHUB_OUTPUT
+            elif [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -d "target/site/jacoco" ]; then
+              echo "detected-language=java" >> $GITHUB_OUTPUT
+            elif [ -f "go.mod" ] || [ -f "coverage.out" ]; then
+              echo "detected-language=go" >> $GITHUB_OUTPUT
+            else
+              echo "detected-language=unknown" >> $GITHUB_OUTPUT
+              echo "::warning::Could not auto-detect language. Please specify language input."
+            fi
+          else
+            echo "detected-language=${{ inputs.language }}" >> $GITHUB_OUTPUT
+          fi
+          
+          # Auto-detect coverage file if not provided
+          if [ -z "${{ inputs.coverage-file }}" ]; then
+            lang=$(echo "${{ inputs.language }}" | tr '[:upper:]' '[:lower:]')
+            if [ "${{ inputs.language }}" = "auto" ]; then
+              lang=$(cat $GITHUB_OUTPUT | grep detected-language= | cut -d'=' -f2)
+            fi
+            
+            case "$lang" in
+              javascript)
+                if [ -f "coverage/lcov.info" ]; then
+                  echo "coverage-file=coverage/lcov.info" >> $GITHUB_OUTPUT
+                elif [ -f "lcov.info" ]; then
+                  echo "coverage-file=lcov.info" >> $GITHUB_OUTPUT
+                elif [ -f "coverage/coverage-final.json" ]; then
+                  echo "coverage-file=coverage/coverage-final.json" >> $GITHUB_OUTPUT
+                else
+                  echo "coverage-file=" >> $GITHUB_OUTPUT
+                  echo "::warning::No JavaScript coverage file found"
+                fi
+                ;;
+              python)
+                if [ -f "coverage.xml" ]; then
+                  echo "coverage-file=coverage.xml" >> $GITHUB_OUTPUT
+                elif [ -f ".coverage" ]; then
+                  echo "coverage-file=.coverage" >> $GITHUB_OUTPUT
+                elif [ -f "htmlcov/index.html" ]; then
+                  echo "coverage-file=htmlcov/index.html" >> $GITHUB_OUTPUT
+                else
+                  echo "coverage-file=" >> $GITHUB_OUTPUT
+                  echo "::warning::No Python coverage file found"
+                fi
+                ;;
+              java)
+                if [ -f "target/site/jacoco/jacoco.csv" ]; then
+                  echo "coverage-file=target/site/jacoco/jacoco.csv" >> $GITHUB_OUTPUT
+                elif [ -f "build/reports/jacoco/test/jacocoTestReport.csv" ]; then
+                  echo "coverage-file=build/reports/jacoco/test/jacocoTestReport.csv" >> $GITHUB_OUTPUT
+                elif [ -f "target/site/jacoco/jacoco.xml" ]; then
+                  echo "coverage-file=target/site/jacoco/jacoco.xml" >> $GITHUB_OUTPUT
+                else
+                  echo "coverage-file=" >> $GITHUB_OUTPUT
+                  echo "::warning::No Java coverage file found"
+                fi
+                ;;
+              go)
+                if [ -f "coverage.out" ]; then
+                  echo "coverage-file=coverage.out" >> $GITHUB_OUTPUT
+                else
+                  echo "coverage-file=" >> $GITHUB_OUTPUT
+                  echo "::warning::No Go coverage file found"
+                fi
+                ;;
+              *)
+                echo "coverage-file=${{ inputs.coverage-file }}" >> $GITHUB_OUTPUT
+                ;;
+            esac
+          else
+            echo "coverage-file=${{ inputs.coverage-file }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate JavaScript coverage badge
+        if: steps.detect.outputs.detected-language == 'javascript' && steps.detect.outputs.coverage-file != ''
+        uses: tj-actions/coverage-badge-js@v2
+        with:
+          path: ${{ inputs.working-directory }}
+          output_path: ${{ inputs.working-directory }}/${{ inputs.badge-path }}
+          report_path: ${{ inputs.working-directory }}/${{ steps.detect.outputs.coverage-file }}
+
+      - name: Generate Python coverage badge
+        if: steps.detect.outputs.detected-language == 'python' && steps.detect.outputs.coverage-file != ''
+        uses: tj-actions/coverage-badge-py@v2
+        with:
+          output: ${{ inputs.badge-path }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Generate Java coverage badge
+        if: steps.detect.outputs.detected-language == 'java' && steps.detect.outputs.coverage-file != ''
+        uses: cicirello/jacoco-badge-generator@v2
+        with:
+          jacoco-csv-file: ${{ inputs.working-directory }}/${{ steps.detect.outputs.coverage-file }}
+          badges-directory: ${{ inputs.working-directory }}/badges
+          coverage-badge-filename: ${{ inputs.badge-path }}
+          generate-coverage-badge: true
+          generate-branches-badge: true
+
+      - name: Move Java badge to correct location
+        if: steps.detect.outputs.detected-language == 'java'
+        run: |
+          if [ -f "${{ inputs.working-directory }}/badges/${{ inputs.badge-path }}" ]; then
+            echo "Java badge generated at correct location"
+          elif [ -f "${{ inputs.working-directory }}/badges/jacoco.svg" ]; then
+            cp "${{ inputs.working-directory }}/badges/jacoco.svg" "${{ inputs.working-directory }}/${{ inputs.badge-path }}"
+          fi
+
+      - name: Install jq for JSON parsing
+        if: steps.detect.outputs.detected-language == 'javascript'
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Setup Go
+        if: steps.detect.outputs.detected-language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Generate Go coverage badge
+        if: steps.detect.outputs.detected-language == 'go' && steps.detect.outputs.coverage-file != ''
+        uses: tj-actions/coverage-badge-go@v2
+        with:
+          filename: ${{ inputs.working-directory }}/${{ steps.detect.outputs.coverage-file }}
+          green: ${{ inputs.green-threshold }}
+          target: ${{ inputs.working-directory }}/${{ inputs.badge-path }}
+
+      - name: Generate generic coverage badge (fallback)
+        if: steps.detect.outputs.detected-language == 'unknown' || steps.detect.outputs.coverage-file == ''
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          # Create a generic "unknown" coverage badge
+          cat > ${{ inputs.badge-path }} << 'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="104" height="20">
+            <linearGradient id="b" x2="0" y2="100%">
+              <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+              <stop offset="1" stop-opacity=".1"/>
+            </linearGradient>
+            <clipPath id="a">
+              <rect width="104" height="20" rx="3" fill="#fff"/>
+            </clipPath>
+            <g clip-path="url(#a)">
+              <path fill="#555" d="M0 0h63v20H0z"/>
+              <path fill="#9f9f9f" d="M63 0h41v20H63z"/>
+              <path fill="url(#b)" d="M0 0h104v20H0z"/>
+            </g>
+            <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="110">
+              <text x="325" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="530">${{ inputs.badge-label }}</text>
+              <text x="325" y="140" transform="scale(.1)" textLength="530">${{ inputs.badge-label }}</text>
+              <text x="825" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="310">unknown</text>
+              <text x="825" y="140" transform="scale(.1)" textLength="310">unknown</text>
+            </g>
+          </svg>
+          EOF
+          echo "Generated fallback badge for unknown coverage"
+
+      - name: Extract coverage percentage
+        id: coverage
+        run: |
+          coverage="unknown"
+          
+          # Try to extract coverage from different file formats
+          coverage_file="${{ inputs.working-directory }}/${{ steps.detect.outputs.coverage-file }}"
+          
+          if [ -f "$coverage_file" ]; then
+            case "${{ steps.detect.outputs.detected-language }}" in
+              javascript)
+                # Extract from lcov.info or coverage-final.json
+                if [[ "$coverage_file" == *.info ]]; then
+                  # Extract coverage from lcov.info - look for LH (lines hit) and LF (lines found)
+                  lines_hit=$(grep -o 'LH:[0-9]*' "$coverage_file" | head -1 | sed 's/LH://' || echo "0")
+                  lines_found=$(grep -o 'LF:[0-9]*' "$coverage_file" | head -1 | sed 's/LF://' || echo "1")
+                  if [ "$lines_found" -gt 0 ] && [ "$lines_hit" -ge 0 ]; then
+                    coverage=$(awk "BEGIN {printf \"%.0f\", ($lines_hit/$lines_found)*100}")
+                  else
+                    coverage="unknown"
+                  fi
+                elif [[ "$coverage_file" == *.json ]]; then
+                  coverage=$(cat "$coverage_file" | jq -r '.total.lines.pct // "unknown"' 2>/dev/null || echo "unknown")
+                fi
+                ;;
+              python)
+                # Extract from coverage.xml
+                if [[ "$coverage_file" == *.xml ]]; then
+                  coverage=$(grep -o 'line-rate="[0-9.]*"' "$coverage_file" | head -1 | sed 's/line-rate="//;s/"//' | awk '{printf "%.0f", $1*100}' || echo "unknown")
+                fi
+                ;;
+              go)
+                # Extract from coverage.out (requires Go to be installed)
+                if [[ "$coverage_file" == *.out ]] && command -v go >/dev/null 2>&1; then
+                  coverage=$(go tool cover -func="$coverage_file" | grep total | awk '{print $3}' | sed 's/%//' 2>/dev/null || echo "unknown")
+                elif [[ "$coverage_file" == *.out ]]; then
+                  echo "::warning::Go is not installed, cannot extract coverage from .out file"
+                  coverage="unknown"
+                fi
+                ;;
+            esac
+          fi
+          
+          echo "percentage=$coverage" >> $GITHUB_OUTPUT
+          echo "Found coverage: $coverage%"
+
+      - name: Set badge info
+        id: badge-info
+        run: |
+          if [ -f "${{ inputs.working-directory }}/${{ inputs.badge-path }}" ]; then
+            echo "Badge generated successfully"
+            # Create URL for the badge in the repository, accounting for working directory
+            if [ "${{ inputs.working-directory }}" = "." ]; then
+              badge_path="${{ inputs.badge-path }}"
+            else
+              badge_path="${{ inputs.working-directory }}/${{ inputs.badge-path }}"
+            fi
+            repo_url="https://raw.githubusercontent.com/${{ github.repository }}/${{ inputs.target-branch }}/$badge_path"
+            echo "url=$repo_url" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::Badge file not found at ${{ inputs.working-directory }}/${{ inputs.badge-path }}"
+            echo "url=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit badge to repository
+        if: inputs.commit-badge == true && github.ref == format('refs/heads/{0}', inputs.target-branch) && github.event_name != 'pull_request'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Add the badge file
+          git add "${{ inputs.working-directory }}/${{ inputs.badge-path }}"
+          
+          # Also add any Java badge files
+          if [ "${{ steps.detect.outputs.detected-language }}" = "java" ]; then
+            git add "${{ inputs.working-directory }}/badges/" 2>/dev/null || true
+          fi
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No badge changes to commit"
+          else
+            git commit -m "Update ${{ steps.detect.outputs.detected-language }} coverage badge [skip ci]"
+            git push
+            echo "Badge committed and pushed to repository"
+          fi
+
+      - name: Upload badge as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-badge
+          path: ${{ inputs.working-directory }}/${{ inputs.badge-path }}
+          retention-days: 90
+
+      - name: Output summary
+        run: |
+          echo "## 📊 Coverage Badge Generated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Language**: ${{ steps.detect.outputs.detected-language }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Coverage File**: ${{ steps.detect.outputs.coverage-file }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Coverage Percentage**: ${{ steps.coverage.outputs.percentage }}%" >> $GITHUB_STEP_SUMMARY
+          echo "- **Badge Path**: ${{ inputs.badge-path }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Add to your README:" >> $GITHUB_STEP_SUMMARY
+          echo '```markdown' >> $GITHUB_STEP_SUMMARY
+          echo "![Coverage](${{ steps.badge-info.outputs.url }})" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Direct Badge URL:" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.badge-info.outputs.url }}" >> $GITHUB_STEP_SUMMARY
