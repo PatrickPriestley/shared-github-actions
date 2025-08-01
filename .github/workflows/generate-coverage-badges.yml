@@ -48,10 +48,6 @@ on:
         required: false
         default: '60'
         type: string
-    secrets:
-      GITHUB_TOKEN:
-        description: 'GitHub token for committing badge'
-        required: false
     outputs:
       coverage-percentage:
         description: 'Coverage percentage found'
@@ -73,7 +69,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN || github.token }}
+          token: ${{ github.token }}
 
       - name: Detect language and coverage file
         id: detect
